@@ -15,9 +15,54 @@
 package main
 
 import (
+	"database/sql"
+	"flag"
+	"fmt"
+	"log"
+
 	"github.com/chilts/patchy"
 )
 
+var level = flag.Int("level", 0, "patch to this level")
+var patchDir = flag.String("patch-dir", ".", "directory containing the patch files")
+var propertyTable = flag.String("property-table", "property", "key/val table to hold the current patch level")
+
+func check(err error) {
+	if err != nil {
+		log.Fatal(err)
+	}
+}
+
 func main() {
-	patchy.Hi()
+	flag.Parse()
+
+	if *level == 0 {
+		fmt.Printf("Provide a patch level (--level)")
+		return
+	}
+
+	if *patchDir == "" {
+		fmt.Printf("Provide a patch level (--patch-dir)")
+		return
+	}
+
+	fmt.Printf("Patching to Level = %d\n", *level)
+	fmt.Printf("Patch Directory   = %s\n", *patchDir)
+	fmt.Printf("Property Table    = %s\n", *propertyTable)
+
+	// open the connection to the database
+	// ToDo: allow all of the same Postgres options from the command line here
+	// db, err := sql.Open("postgres", "user=zentype dbname=zentype")
+	db, err := sql.Open("postgres", "")
+	check(err)
+
+	// patch this database
+	opts := patchy.Options{
+		Dir:           *patchDir,
+		PropertyTable: *propertyTable,
+	}
+	newLevel, err := patchy.Patch(db, *level, &opts)
+	check(err)
+
+	fmt.Printf("Database patched to level %d\n", newLevel)
 }
