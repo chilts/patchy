@@ -36,7 +36,7 @@ func check(err error) {
 func main() {
 	flag.Parse()
 
-	if *level == 0 {
+	if *level < 0 {
 		fmt.Printf("Provide a patch level (--level)")
 		return
 	}
@@ -64,5 +64,5 @@ func main() {
 	newLevel, err := patchy.Patch(db, *level, &opts)
 	check(err)
 
-	fmt.Printf("Database patched to level %d\n", newLevel)
+	fmt.Printf("bin/patchy: Database patched to level %d\n", newLevel)
 }

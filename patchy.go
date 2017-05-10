@@ -18,6 +18,7 @@ import (
 	"database/sql"
 	"fmt"
 	"io/ioutil"
+	"log"
 	"path"
 	"strconv"
 	"strings"
@@ -25,9 +26,7 @@ import (
 	_ "github.com/lib/pq"
 )
 
-func Hi() {
-	fmt.Printf("Hi\n")
-}
+var patchKey = "patch"
 
 type Options struct {
 	Dir           string
@@ -55,15 +54,64 @@ func oneRowOneColBool(rows *sql.Rows) (bool, error) {
 	return val, rows.Err()
 }
 
+func insertPatchLevel(db *sql.DB, tableName string) error {
+	sqlIns := `INSERT INTO ` + tableName + `(key, value) VALUES($1, 1)`
+	_, err := db.Exec(sqlIns, patchKey)
+	return err
+}
+
+func createPropertyTable(db *sql.DB, tableName string) error {
+	sqlCreateTable := `
+		CREATE TABLE ` + tableName + ` (
+			key   TEXT PRIMARY KEY,
+			value TEXT
+		);
+    `
+
+	_, err := db.Exec(sqlCreateTable)
+	if err != nil {
+		return err
+	}
+
+	err = insertPatchLevel(db, tableName)
+	return err
+}
+
+func getCurrentLevel(db *sql.DB, tableName string) (int, error) {
+	sqlSel := "SELECT value FROM " + tableName + " WHERE key = $1"
+	fmt.Printf("sql=%s\n", sqlSel)
+	fmt.Printf("key=%s\n", patchKey)
+
+	var level int
+	row := db.QueryRow(sqlSel, patchKey)
+	if err := row.Scan(&level); err != nil {
+		if err == sql.ErrNoRows {
+			fmt.Printf("*** NO ROWS\n")
+
+			err := insertPatchLevel(db, tableName)
+			return 0, err
+		}
+		return 0, err
+	}
+
+	return level, nil
+}
+
 func Patch(db *sql.DB, level int, opts *Options) (int, error) {
 	if opts == nil {
 		opts = &Options{}
 	}
 
-	// read the dir list
+	// set some option defaults
 	if opts.Dir == "" {
 		opts.Dir = "."
 	}
+	if opts.PropertyTable == "" {
+		opts.PropertyTable = "property"
+	}
+	fmt.Printf("Options=%#v\n", opts)
+
+	// read the dir list
 	files, err := ioutil.ReadDir(opts.Dir)
 	if err != nil {
 		return 0, err
@@ -74,13 +122,13 @@ func Patch(db *sql.DB, level int, opts *Options) (int, error) {
 	for _, file := range files {
 		fmt.Printf("file=%s\n", file.Name())
 
-		direction := ""
-		if strings.HasPrefix(file.Name(), "forward-") {
+		patchDirection := ""
+		if strings.HasSuffix(file.Name(), "-forward.sql") {
 			fmt.Printf("- forward\n")
-			direction = "forward"
-		} else if strings.HasPrefix(file.Name(), "reverse-") {
+			patchDirection = "forward"
+		} else if strings.HasSuffix(file.Name(), "-reverse.sql") {
 			fmt.Printf("- reverse\n")
-			direction = "reverse"
+			patchDirection = "reverse"
 		} else {
 			fmt.Printf("- unknown\n")
 			continue
@@ -88,8 +136,7 @@ func Patch(db *sql.DB, level int, opts *Options) (int, error) {
 
 		// what is the patch level of this filename
 		patchLevel := file.Name()
-		patchLevel = strings.TrimPrefix(patchLevel, direction+"-")
-		patchLevel = strings.TrimSuffix(patchLevel, ".sql")
+		patchLevel = strings.TrimSuffix(patchLevel, "-"+patchDirection+".sql")
 
 		// check this is a number
 		n, err := strconv.Atoi(patchLevel)
@@ -99,9 +146,9 @@ func Patch(db *sql.DB, level int, opts *Options) (int, error) {
 
 		// read this file in
 		if _, ok := patchSet[n]; ok {
-			fmt.Printf("patch exists\n")
+			fmt.Printf("patch already exists, so adding the other direction (hopefully)\n")
 		} else {
-			fmt.Printf("no such patch in patchset yet\n")
+			fmt.Printf("no such patch in patchset yet - adding\n")
 			patchSet[n] = &patch{}
 		}
 
@@ -112,10 +159,10 @@ func Patch(db *sql.DB, level int, opts *Options) (int, error) {
 		}
 
 		p := patchSet[n]
-		if direction == "forward" {
+		if patchDirection == "forward" {
 			p.Forward = string(sql)
 		}
-		if direction == "reverse" {
+		if patchDirection == "reverse" {
 			p.Reverse = string(sql)
 		}
 		fmt.Printf("p=%#v\n", p)
@@ -123,9 +170,7 @@ func Patch(db *sql.DB, level int, opts *Options) (int, error) {
 
 	fmt.Printf("PatchSet=%v\n", patchSet)
 
-	// remember some things when we check the property table
-	// var patchRowExists bool
-	var currentLevel int
+	// ToDo: check that we have all patches (both Forward and Reverse) up to the level required
 
 	// firstly, figure out if the property table exists
 	sqlPropertyTableExists := `
@@ -137,57 +182,103 @@ func Patch(db *sql.DB, level int, opts *Options) (int, error) {
             WHERE
                 table_schema = 'public'
             AND
-                table_name = 'property'
+                table_name = $1
         );
     `
 
-	queryExists, err := db.Query(sqlPropertyTableExists)
+	// check to see if the property table exists
+	var propertyTableExists bool
+	row := db.QueryRow(sqlPropertyTableExists, opts.PropertyTable)
+	if err := row.Scan(&propertyTableExists); err != nil {
+		return 0, err
+	}
+	if propertyTableExists == false {
+		fmt.Printf("Creating property table\n")
+		err := createPropertyTable(db, opts.PropertyTable)
+		if err != nil {
+			return 0, err
+		}
+	}
+
+	// current patch level
+	currentLevel, err := getCurrentLevel(db, opts.PropertyTable)
 	if err != nil {
 		return 0, err
 	}
+	fmt.Printf("-> Current Level = %d\n", currentLevel)
 
-	propertyTableExists, err := oneRowOneColBool(queryExists)
-	if err != nil {
-		if err == sql.ErrNoRows {
-
-		} else {
-			// no table exists probably
-		}
+	// figure out which direction we're actually going to go in
+	direction := ""
+	step := 0
+	if currentLevel < level {
+		direction = "forward"
+		step = 1
 	}
+	if currentLevel > level {
+		direction = "reverse"
+		step = -1
+	}
+	if currentLevel == level {
+		fmt.Printf("Nothing to do, currently at the same level %d\n", level)
+		return level, nil
+	}
+	fmt.Printf("-> Direction = %s\n", direction)
 
-	// figure out the current patch level
-	key := 21
-	rows, err := db.Query("SELECT value FROM property WHERE key = $1", key)
-	defer rows.Close()
+	for num := currentLevel; num != level; num += step {
+		fmt.Printf("- doing from %d to %d\n", num, num+step)
 
-	// loop through all rows (though we expect one at the most)
-	for rows.Next() {
-		propertyTableExists = true
-		err = rows.Scan(&currentLevel)
+		// loop through all of the patches we know about
+		fmt.Printf("-> BEGIN ...\n")
+		tx, err := db.Begin()
 		if err != nil {
-			return 0, rows.Err()
+			return 0, err
 		}
+		fmt.Printf("-> BEGIN done\n")
+
+		// update with this patch
+		sql := ""
+		if direction == "forward" {
+			sql = patchSet[num+step].Forward
+		}
+		if direction == "reverse" {
+			sql = patchSet[num].Reverse
+		}
+		fmt.Printf("-----> SQL = %s\n", sql)
+		_, err = db.Exec(sql)
+		if err != nil {
+			fmt.Printf("-> ROLLBACK ...\n")
+			err2 := tx.Rollback()
+			if err2 != nil {
+				log.Fatal(err2)
+			}
+			fmt.Printf("-> ROLLBACK done\n")
+			return num, err
+		}
+
+		// update the property table
+		_, err = db.Exec(`UPDATE property SET value = $1 WHERE key = $2`, num+step, patchKey)
+		if err != nil {
+			fmt.Printf("-> ROLLBACK ...\n")
+			err2 := tx.Rollback()
+			if err2 != nil {
+				log.Fatal(err2)
+			}
+			fmt.Printf("-> ROLLBACK done\n")
+			return num, err
+		}
+
+		// commit
+		fmt.Printf("-> COMMIT ...\n")
+		err = tx.Commit()
+		if err != nil {
+			err2 := tx.Rollback()
+			if err2 != nil {
+				log.Fatal(err2)
+			}
+			return 0, err
+		}
+		fmt.Printf("-> COMMIT done\n")
 	}
 
-	// get any error encountered during iteration
-	if rows.Err() != nil {
-		return 0, rows.Err()
-	}
-
-	if propertyTableExists {
-
-	} else {
-
-	}
-
-	// readPatchDir,
-	// getCurrentPatch,
-	// checkAllPatchFilesExist,
-	// begin,
-
-	// nextPatch,
-	// writeCurrentLevel,
-	// commit,
-
-	return 1, nil
+	return level, nil
 }
