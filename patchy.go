@@ -55,14 +55,14 @@ func oneRowOneColBool(rows *sql.Rows) (bool, error) {
 }
 
 func insertPatchLevel(db *sql.DB, tableName string) error {
-	sqlIns := `INSERT INTO ` + tableName + `(key, value) VALUES($1, 1)`
+	sqlIns := `INSERT INTO "` + tableName + `"(key, value) VALUES($1, 0)`
 	_, err := db.Exec(sqlIns, patchKey)
 	return err
 }
 
 func createPropertyTable(db *sql.DB, tableName string) error {
 	sqlCreateTable := `
-		CREATE TABLE ` + tableName + ` (
+		CREATE TABLE "` + tableName + `" (
 			key   TEXT PRIMARY KEY,
 			value TEXT
 		);
@@ -78,7 +78,7 @@ func createPropertyTable(db *sql.DB, tableName string) error {
 }
 
 func getCurrentLevel(db *sql.DB, tableName string) (int, error) {
-	sqlSel := "SELECT value FROM " + tableName + " WHERE key = $1"
+	sqlSel := `SELECT value FROM "` + tableName + `" WHERE key = $1`
 	fmt.Printf("sql=%s\n", sqlSel)
 	fmt.Printf("key=%s\n", patchKey)
 
@@ -120,6 +120,7 @@ func Patch(db *sql.DB, level int, opts *Options) (int, error) {
 	// check the files are what we expect
 	patchSet := make(map[int]*patch)
 	for _, file := range files {
+		fmt.Println("--- Reading Patches ---")
 		fmt.Printf("file=%s\n", file.Name())
 
 		patchDirection := ""
@@ -145,10 +146,8 @@ func Patch(db *sql.DB, level int, opts *Options) (int, error) {
 		}
 
 		// read this file in
-		if _, ok := patchSet[n]; ok {
-			fmt.Printf("patch already exists, so adding the other direction (hopefully)\n")
-		} else {
-			fmt.Printf("no such patch in patchset yet - adding\n")
+		if _, ok := patchSet[n]; !ok {
+			fmt.Printf("adding empty patchset\n")
 			patchSet[n] = &patch{}
 		}
 
@@ -256,7 +255,7 @@ func Patch(db *sql.DB, level int, opts *Options) (int, error) {
 		}
 
 		// update the property table
-		_, err = db.Exec(`UPDATE property SET value = $1 WHERE key = $2`, num+step, patchKey)
+		_, err = db.Exec(`UPDATE "`+opts.PropertyTable+`" SET value = $1 WHERE key = $2`, num+step, patchKey)
 		if err != nil {
 			fmt.Printf("-> ROLLBACK ...\n")
 			err2 := tx.Rollback()

@@ -14,8 +14,77 @@
 
 package patchy
 
-import "testing"
+import (
+	"database/sql"
+	"testing"
 
-func TestHi(t *testing.T) {
+	_ "github.com/lib/pq"
+)
+
+func TestSimple(t *testing.T) {
+	db, err := sql.Open("postgres", "user=patchy dbname=patchy")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	// opts for this test
+	opts := Options{
+		Dir: "example/simple",
+	}
+
+	// test a simple forward patch
+	level, err := Patch(db, 2, &opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if level != 2 {
+		t.Fatalf("Level expected %q, but got %q", 2, level)
+	}
+
+	// test a simple patch
+	level, err = Patch(db, 0, &opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if level != 0 {
+		t.Fatalf("Level expected %v, but got %v", 0, level)
+	}
+
+	// test a simple patch
+	level, err = Patch(db, 1, &opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if level != 1 {
+		t.Fatalf("Level expected %v, but got %v", 1, level)
+	}
+
+	// test a simple patch
+	level, err = Patch(db, 2, &opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if level != 2 {
+		t.Fatalf("Level expected %v, but got %v", 2, level)
+	}
+
+	// test a simple patch
+	level, err = Patch(db, 1, &opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if level != 1 {
+		t.Fatalf("Level expected %v, but got %v", 1, level)
+	}
+
+	// test a simple patch
+	level, err = Patch(db, 0, &opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if level != 0 {
+		t.Fatalf("Level expected %v, but got %v", 0, level)
+	}
 
 }
